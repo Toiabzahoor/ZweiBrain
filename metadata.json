@@ -1,0 +1,6 @@
+{
+  "name": "zweibrain — Human Brain Atlas",
+  "description": "High-fidelity, anatomically accurate interactive 3D human brain model with cortical convolutions, subcortical dissection, pial vasculature, and reference plates.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
