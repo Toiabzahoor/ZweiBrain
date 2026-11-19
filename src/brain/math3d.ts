@@ -206,17 +206,32 @@ function computeNamedSulci(
   return { depth, sylvian };
 }
 
+export interface SculptedVertexLayers extends SculptedVertexData {
+  baseX: number;
+  baseY: number;
+  baseZ: number;
+  primaryDx: number;
+  primaryDy: number;
+  primaryDz: number;
+  foldDx: number;
+  foldDy: number;
+  foldDz: number;
+  /** Weight [0..1] distinguishing fine tertiary/secondary branching from broad primary crowns */
+  secondaryBranchWeight: number;
+}
+
 /**
  * Evaluates the anatomically sculpted cortical hemisphere point for a unit sphere direction
- * `(nx, ny, nz)` and hemisphere side (`-1` Left, `+1` Right).
+ * `(nx, ny, nz)` and hemisphere side (`-1` Left, `+1` Right), decomposing the result into
+ * lissencephalic envelope, primary named sulci delta, and secondary/tertiary gyral delta.
  * Scaled at 1.0 unit = 70 mm (adult MNI152 ~167 mm AP × 140 mm ML × 93 mm SI).
  */
-export function evaluateCorticalVertex(
+export function evaluateCorticalVertexLayers(
   nx: number,
   ny: number,
   nz: number,
   side: -1 | 1,
-): SculptedVertexData {
+): SculptedVertexLayers {
   // Normalize input direction cleanly
   const invLen = 1 / Math.hypot(nx, ny, nz);
   const ux = nx * invLen;
@@ -231,7 +246,7 @@ export function evaluateCorticalVertex(
   const zTorque = side > 0 ? 0.014 * smoothstep(-0.2, 0.9, uz) : -0.014 * smoothstep(0.2, -0.9, uz);
 
   // 1. Anterior-Posterior axis (~2.38 units total = 166.6 mm)
-  let z = uz * 1.19 - 0.01 + zTorque;
+  const z = uz * 1.19 - 0.01 + zTorque;
 
   // Temporal pole tuck: anterolateral temporal lobe juts slightly forward beneath frontal operculum
   const temporalRegion =
@@ -274,25 +289,17 @@ export function evaluateCorticalVertex(
   } else {
     // Ventral silhouette: orbital plate (high/flat), temporal bulge (low), tentorial arch (vaulted)
     const down = Math.pow(-uy, 0.82);
-    // Base floor before lobe sculpting
     let ventralDepth = 0.24;
-    // Orbital frontal flattening (z > 0.26): flat above eye sockets
     const orbitalMask = smoothstep(0.22, 0.65, uz);
     ventralDepth = lerp(ventralDepth, 0.14, orbitalMask);
-    // Lateral temporal bulge (drops down to ~ -0.44)
     ventralDepth += 0.23 * temporalRegion;
-    // Occipital tentorial arch above cerebellum (z < -0.25)
     const tentorialMask = smoothstep(-0.22, -0.72, uz);
     const medialTent = smoothstep(0.85, 0.05, absX);
     ventralDepth = lerp(ventralDepth, 0.06 + 0.12 * (1 - medialTent), tentorialMask);
-    // Pre-occipital notch indentation
     const preOccNotch =
       Math.exp(-Math.pow((uz + 0.45) / 0.12, 2)) * smoothstep(0.25, 0.7, -uy);
     ventralDepth -= 0.07 * preOccNotch;
-
-    // Gently round the inferomedial margin so midsagittal view has no sharp flat step
     ventralDepth *= lerp(1.0, 0.86, medialFactor * smoothstep(0.0, -0.5, uy));
-
     y = -down * ventralDepth;
   }
 
@@ -300,8 +307,7 @@ export function evaluateCorticalVertex(
   y -= 0.05 * smoothstep(0.55, 1.0, uz);
   y -= 0.04 * smoothstep(-0.55, -1.0, uz);
 
-  // 4. Medial Callosal & Diencephalic Recess:
-  // Ensure medial cortex clears Corpus Callosum (z in [-0.46..0.58], y in [-0.08..0.44]) & Thalamus/Brainstem
+  // 4. Medial Callosal & Diencephalic Recess
   if (lat < 0.2) {
     const recessZ = (z - 0.02) / 0.56;
     const recessY = (y - 0.02) / 0.36;
@@ -310,32 +316,36 @@ export function evaluateCorticalVertex(
     absX = Math.max(absX, 0.025 + 0.21 * recessMask);
   }
 
+  // Smooth lissencephalic unfolded envelope (pre-sulcal, pre-gyral)
+  const baseX = absX * side;
+  const baseY = y;
+  const baseZ = z;
+
   // 5. Named Primary Sulci & Sylvian Fissure Cleft
   const sulci = computeNamedSulci(absX, y, z, lat, side);
 
   // Carve Sylvian fissure inward along lateral surface
+  let primaryAbsX = absX;
+  let primaryY = y;
   if (sulci.sylvian > 0.01) {
-    absX -= 0.14 * sulci.sylvian;
-    y += 0.015 * sulci.sylvian;
+    primaryAbsX -= 0.14 * sulci.sylvian;
+    primaryY += 0.015 * sulci.sylvian;
   }
 
   // 6. Domain-Warped Zero-Crossing Cortical Convolutions (Tight Serpentine Gyri & Crisp Sulci)
   const phase = side * 2.17;
   const warpScale = 2.75;
-  const wx = fbm3D(absX * warpScale + 11.3 + phase, y * warpScale + 3.7, z * warpScale + 5.1, 2);
-  const wy = fbm3D(absX * warpScale + 23.1, y * warpScale + 17.9 + phase, z * warpScale + 9.4, 2);
-  const wz = fbm3D(absX * warpScale + 7.2, y * warpScale + 31.4, z * warpScale + 19.8 + phase, 2);
+  const wx = fbm3D(primaryAbsX * warpScale + 11.3 + phase, primaryY * warpScale + 3.7, z * warpScale + 5.1, 2);
+  const wy = fbm3D(primaryAbsX * warpScale + 23.1, primaryY * warpScale + 17.9 + phase, z * warpScale + 9.4, 2);
+  const wz = fbm3D(primaryAbsX * warpScale + 7.2, primaryY * warpScale + 31.4, z * warpScale + 19.8 + phase, 2);
 
-  const px = absX + 0.135 * wx;
-  const py = y + 0.135 * wy;
+  const px = primaryAbsX + 0.135 * wx;
+  const py = primaryY + 0.135 * wy;
   const pz = z + 0.135 * wz;
 
-  // Higher gyral density (~10-13 tubular ribbons across convexity, matching adult specimen)
-  const isOrbital = smoothstep(0.28, 0.72, z) * smoothstep(0.05, -0.25, y);
+  const isOrbital = smoothstep(0.28, 0.72, z) * smoothstep(0.05, -0.25, primaryY);
   const gyriFreq = lerp(5.95, 6.85, isOrbital);
   const n1 = fbm3D(px * gyriFreq + phase, py * gyriFreq, pz * gyriFreq, 2);
-
-  // Secondary branching sulcal creases along broader gyral crowns
   const n2 = fbm3D(
     px * gyriFreq * 1.78 + 4.3 + phase,
     py * gyriFreq * 1.78 + 8.1,
@@ -343,46 +353,92 @@ export function evaluateCorticalVertex(
     2,
   );
 
-  // Plateau-crowned tubular gyri separated by narrow, sharp, deep V-shaped sulcal clefts
   const absN1 = Math.abs(n1);
   const primaryRidge = 1.0 - Math.exp(-Math.pow(absN1 / 0.145, 1.9));
   const secondaryCrease = 1.0 - Math.exp(-Math.pow(Math.abs(n2) / 0.11, 1.7));
 
-  // Blend secondary branching only where primary crown is wide, preserving continuous ribbons
   const combinedCrown =
     primaryRidge * lerp(0.80, 1.0, secondaryCrease) * (1.0 - 0.82 * sulci.depth);
   const gyrusHeight = clamp(combinedCrown, 0, 1);
 
-  // Attenuate folding inside deep callosal recess and deep Sylvian cleft
   const recessAtten =
     lat < 0.05
-      ? 1.0 - 0.75 * smoothstep(0.85, 0.45, Math.hypot((z - 0.02) / 0.56, (y - 0.02) / 0.36))
+      ? 1.0 - 0.75 * smoothstep(0.85, 0.45, Math.hypot((z - 0.02) / 0.56, (primaryY - 0.02) / 0.36))
       : 1.0;
   const foldAmp =
     lerp(0.032, 0.048, smoothstep(-0.1, 0.4, lat)) *
     recessAtten *
     (1.0 - 0.45 * isOrbital);
 
-  // Compute outward radial-biased normal direction for displacement
   const disp = (gyrusHeight - 0.76) * foldAmp;
-  const normLen = Math.hypot(absX, y * 1.15, z * 0.85) || 1;
-  const dx = (absX / normLen) * disp;
-  const dy = ((y * 1.15) / normLen) * disp;
-  const dz = ((z * 0.85) / normLen) * disp;
+  const normLen = Math.hypot(primaryAbsX, primaryY * 1.15, z * 0.85) || 1;
+  const nxOut = primaryAbsX / normLen;
+  const nyOut = (primaryY * 1.15) / normLen;
+  const nzOut = (z * 0.85) / normLen;
 
-  const finalAbsX = Math.max(0.022, absX + dx);
-  const finalY = y + dy;
+  const dx = nxOut * disp;
+  const dy = nyOut * disp;
+  const dz = nzOut * disp;
+
+  const finalAbsX = Math.max(0.022, primaryAbsX + dx);
+  const finalX = finalAbsX * side;
+  const finalY = primaryY + dy;
   const finalZ = z + dz;
 
+  // Primary sulcal indentation vector from smooth base envelope (Sylvian + named primary sulci troughs)
+  const primaryGrooveDisp = -0.68 * sulci.depth * foldAmp;
+  const primaryX = Math.max(0.022, primaryAbsX + nxOut * primaryGrooveDisp) * side;
+  const primaryPosY = primaryY + nyOut * primaryGrooveDisp;
+  const primaryPosZ = z + nzOut * primaryGrooveDisp;
+
+  const primaryDx = primaryX - baseX;
+  const primaryDy = primaryPosY - baseY;
+  const primaryDz = primaryPosZ - baseZ;
+
+  // Residual serpentine secondary/tertiary gyral displacement (sums exactly to adult position!)
+  const foldDx = finalX - primaryX;
+  const foldDy = finalY - primaryPosY;
+  const foldDz = finalZ - primaryPosZ;
+
+  const secondaryBranchWeight = clamp(1.0 - secondaryCrease, 0, 1);
   const lobe = classifyCorticalLobe(finalAbsX, finalY, finalZ);
 
   return {
-    x: finalAbsX * side,
+    x: finalX,
     y: finalY,
     z: finalZ,
     gyrusHeight,
     medialFactor,
     lobe,
     primarySulcus: sulci.depth,
+    baseX,
+    baseY,
+    baseZ,
+    primaryDx,
+    primaryDy,
+    primaryDz,
+    foldDx,
+    foldDy,
+    foldDz,
+    secondaryBranchWeight,
   };
 }
+
+export function evaluateCorticalVertex(
+  nx: number,
+  ny: number,
+  nz: number,
+  side: -1 | 1,
+): SculptedVertexData {
+  const full = evaluateCorticalVertexLayers(nx, ny, nz, side);
+  return {
+    x: full.x,
+    y: full.y,
+    z: full.z,
+    gyrusHeight: full.gyrusHeight,
+    medialFactor: full.medialFactor,
+    lobe: full.lobe,
+    primarySulcus: full.primarySulcus,
+  };
+}
+

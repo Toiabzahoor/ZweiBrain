@@ -5,12 +5,19 @@ import { HoverTooltip } from './components/HoverTooltip';
 import { InspectorPanel } from './components/InspectorPanel';
 import { ReferenceModal } from './components/ReferenceModal';
 import {
+  computeCorticalDevelopment,
   computeScaledDimensionsMm,
   formatAgeLabel,
   getOverallKnowledgeCoverage,
+  isPrenatalAge,
+  MAX_AGE_YEARS,
+  MIN_AGE_YEARS,
 } from './data/lifespan';
 import {
   BRAIN_REGIONS,
+  isBodyNerveRegion,
+  isNerveRegion,
+  isVesselRegion,
   type CameraPresetId,
   type RegionId,
   type TissueFinish,
@@ -29,6 +36,8 @@ export default function App() {
   const [cameraPreset, setCameraPreset] = useState<CameraPresetId | null>('lateral');
   const [cameraRequestNonce, setCameraRequestNonce] = useState(0);
   const [showVessels, setShowVessels] = useState(true);
+  const [showNerves, setShowNerves] = useState(true);
+  const [showWholeBody, setShowWholeBody] = useState(false);
   const [showVentricles, setShowVentricles] = useState(false);
   const [autoRotate, setAutoRotate] = useState(false);
   const [dockCollapsed, setDockCollapsed] = useState(false);
@@ -37,10 +46,31 @@ export default function App() {
 
   const dims = computeScaledDimensionsMm(ageYears);
   const overall = getOverallKnowledgeCoverage(ageYears);
+  const devState = computeCorticalDevelopment(ageYears);
 
   const handleSelectCameraPreset = useCallback((preset: CameraPresetId) => {
+    if (preset === 'whole-body') {
+      setShowWholeBody(true);
+      setShowNerves(true);
+    }
     setCameraPreset(preset);
     setCameraRequestNonce((n) => n + 1);
+  }, []);
+
+  const handleToggleWholeBody = useCallback(() => {
+    setShowWholeBody((prev) => {
+      const next = !prev;
+      if (next) {
+        setShowNerves(true);
+        setCameraPreset('whole-body');
+        setCameraRequestNonce((n) => n + 1);
+      } else {
+        setSelectedRegion((cur) => (cur && isBodyNerveRegion(cur) ? null : cur));
+        setCameraPreset('lateral');
+        setCameraRequestNonce((n) => n + 1);
+      }
+      return next;
+    });
   }, []);
 
   const handleChangeViewMode = useCallback((mode: ViewMode) => {
@@ -65,8 +95,14 @@ export default function App() {
     if (regionId === 'ventricles') {
       setShowVentricles(true);
     }
-    if (regionId === 'vasculature') {
+    if (isVesselRegion(regionId)) {
       setShowVessels(true);
+    }
+    if (isNerveRegion(regionId)) {
+      setShowNerves(true);
+    }
+    if (isBodyNerveRegion(regionId)) {
+      setShowWholeBody(true);
     }
     setCameraPreset(null);
   }, []);
@@ -80,14 +116,14 @@ export default function App() {
   );
 
   const handleChangeAge = useCallback((nextAge: number) => {
-    const clamped = Math.max(0, Math.min(122, nextAge));
+    const clamped = Math.max(MIN_AGE_YEARS, Math.min(MAX_AGE_YEARS, nextAge));
     setAgeYears(clamped);
   }, []);
 
   const handleTogglePlay = useCallback(() => {
     setIsPlaying((prev) => {
-      if (!prev && ageYears >= 122) {
-        setAgeYears(0);
+      if (!prev && ageYears >= MAX_AGE_YEARS) {
+        setAgeYears(MIN_AGE_YEARS);
       }
       return !prev;
     });
@@ -97,7 +133,7 @@ export default function App() {
     setCameraPreset(null);
   }, []);
 
-  // Smooth lifespan playback across 0–122 years without saturating React / software WebGL
+  // Smooth lifespan playback across GW4 prenatal morphogenesis -> Birth -> 122 years
   useEffect(() => {
     if (!isPlaying) return;
     let lastTime = performance.now();
@@ -107,12 +143,23 @@ export default function App() {
       lastTime = now;
 
       setAgeYears((prev) => {
-        const next = prev + dtSec * playSpeed;
-        if (next >= 122) {
+        // Move in gentle gestational weeks while prenatal so sulci folding & nerve sprouting are visible
+        const rateYrPerSec = isPrenatalAge(prev)
+          ? playSpeed === 1
+            ? 0.03
+            : playSpeed === 5
+              ? 0.08
+              : 0.16
+          : playSpeed;
+        const next = prev + dtSec * rateYrPerSec;
+        if (next >= MAX_AGE_YEARS) {
           setIsPlaying(false);
-          return 122;
+          return MAX_AGE_YEARS;
         }
-        return Number(next.toFixed(2));
+        if (prev < 0 && next >= 0) {
+          return 0;
+        }
+        return Number(next.toFixed(4));
       });
     }, 60);
     return () => window.clearInterval(timer);
@@ -143,6 +190,8 @@ export default function App() {
         handleSelectCameraPreset('inferior');
       } else if (e.key === '5') {
         handleSelectCameraPreset('midsagittal');
+      } else if (e.key === '6') {
+        handleSelectCameraPreset('whole-body');
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -155,11 +204,15 @@ export default function App() {
       data-finish={tissueFinish}
       data-selected-region={selectedRegion ?? 'none'}
       data-age={ageYears.toFixed(2)}
+      data-gw={devState.gestationalWeek.toFixed(1)}
       data-playing={isPlaying ? 'true' : 'false'}
+      data-show-vessels={showVessels ? 'true' : 'false'}
+      data-show-nerves={showNerves ? 'true' : 'false'}
+      data-show-whole-body={showWholeBody ? 'true' : 'false'}
       className="relative w-screen h-screen overflow-hidden bg-[#07090e]"
     >
       {/* Top-Left Brand, Dynamic Lifespan Dimensions & Overall Epistemic Coverage */}
-      <header className="fixed top-4 left-4 z-20 pointer-events-none select-none bg-[#07090e]/85 border border-white/8 rounded-lg px-3 py-2">
+      <header className="fixed top-4 left-4 z-20 pointer-events-none select-none bg-[#07090e]/85 border border-white/8 rounded-lg px-3 py-2 max-w-[min(560px,calc(100vw-2rem))]">
         <h1 className="text-base font-semibold tracking-tight text-white">
           zweibrain
         </h1>
@@ -176,7 +229,7 @@ export default function App() {
         </div>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs mt-0.5 font-mono-tabular">
           <span className="text-[#e2e8f0]" data-testid="brain-age-readout">
-            Age {formatAgeLabel(ageYears)}
+            {isPrenatalAge(ageYears) ? formatAgeLabel(ageYears) : `Age ${formatAgeLabel(ageYears)}`}
           </span>
           <span className="text-[#8b95a7]" aria-hidden="true">·</span>
           <span className="text-emerald-300" data-testid="overall-known-readout">
@@ -195,6 +248,12 @@ export default function App() {
             </>
           )}
         </div>
+        <div
+          data-testid="morphogenesis-stage-readout"
+          className="mt-0.5 text-[11px] text-[#9aa4b4] truncate"
+        >
+          {devState.morphStageLabel}
+        </div>
       </header>
 
       {/* Unobstructed Central 3D Viewport */}
@@ -207,6 +266,8 @@ export default function App() {
         cameraPreset={cameraPreset}
         cameraRequestNonce={cameraRequestNonce}
         showVessels={showVessels}
+        showNerves={showNerves}
+        showWholeBody={showWholeBody}
         showVentricles={showVentricles}
         autoRotate={autoRotate}
         onSelectRegion={handleSelectRegion}
@@ -252,6 +313,10 @@ export default function App() {
         onSelectCameraPreset={handleSelectCameraPreset}
         showVessels={showVessels}
         onToggleVessels={() => setShowVessels((v) => !v)}
+        showNerves={showNerves}
+        onToggleNerves={() => setShowNerves((n) => !n)}
+        showWholeBody={showWholeBody}
+        onToggleWholeBody={handleToggleWholeBody}
         showVentricles={showVentricles}
         onToggleVentricles={() => setShowVentricles((v) => !v)}
         autoRotate={autoRotate}

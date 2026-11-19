@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import {
   ChevronDown,
   ChevronUp,
@@ -8,7 +9,14 @@ import {
   Play,
   RotateCw,
 } from 'lucide-react';
-import { formatAgeLabel, QUICK_JUMP_AGES } from '../data/lifespan';
+import {
+  ageYearsToGestationalWeek,
+  formatAgeLabel,
+  gestationalWeekToAgeYears,
+  isPrenatalAge,
+  PRENATAL_QUICK_JUMP_WEEKS,
+  QUICK_JUMP_AGES,
+} from '../data/lifespan';
 import {
   CAMERA_PRESETS,
   type CameraPresetId,
@@ -35,6 +43,10 @@ interface ControlDockProps {
   onSelectCameraPreset: (preset: CameraPresetId) => void;
   showVessels: boolean;
   onToggleVessels: () => void;
+  showNerves: boolean;
+  onToggleNerves: () => void;
+  showWholeBody: boolean;
+  onToggleWholeBody: () => void;
   showVentricles: boolean;
   onToggleVentricles: () => void;
   autoRotate: boolean;
@@ -84,6 +96,10 @@ export function ControlDock({
   onSelectCameraPreset,
   showVessels,
   onToggleVessels,
+  showNerves,
+  onToggleNerves,
+  showWholeBody,
+  onToggleWholeBody,
   showVentricles,
   onToggleVentricles,
   autoRotate,
@@ -92,10 +108,33 @@ export function ControlDock({
   onToggleStructures,
   onOpenReferences,
 }: ControlDockProps) {
+  const [timelineEra, setTimelineEra] = useState<'prenatal' | 'lifespan'>(() =>
+    isPrenatalAge(ageYears) ? 'prenatal' : 'lifespan',
+  );
+
+  useEffect(() => {
+    if (isPrenatalAge(ageYears)) {
+      setTimelineEra('prenatal');
+    } else if (ageYears > 0.01) {
+      setTimelineEra('lifespan');
+    }
+  }, [ageYears]);
+
+  const currentGw = ageYearsToGestationalWeek(ageYears);
+
+  const handleSelectEra = (era: 'prenatal' | 'lifespan') => {
+    setTimelineEra(era);
+    if (era === 'prenatal' && ageYears >= 0) {
+      onChangeAge(gestationalWeekToAgeYears(14));
+    } else if (era === 'lifespan' && ageYears < 0) {
+      onChangeAge(0);
+    }
+  };
+
   return (
     <div
       className="fixed bottom-4 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center pointer-events-none"
-      style={{ width: 'min(1080px, 96vw)' }}
+      style={{ width: 'min(1260px, 96vw)' }}
     >
       {/* Collapse / Expand tab attached to top edge of dock */}
       <button
@@ -127,9 +166,42 @@ export function ControlDock({
         }`}
       >
         <div className="flex flex-col gap-2.5">
-          {/* Row 0: Lifespan Play/Pause, Speed, 0-122 Year Slider & Quick-Jumps */}
+          {/* Row 0: Prenatal (GW4-40) / Lifespan (0-122 yr) Play/Pause, Speed, Slider & Quick-Jumps */}
           <div className="flex flex-wrap items-center justify-between gap-2.5">
-            <div className="flex items-center gap-2 flex-1 min-w-[280px]">
+            <div className="flex items-center gap-2 flex-1 min-w-[300px]">
+              <div
+                role="group"
+                aria-label="Developmental timeline era"
+                className="inline-flex items-center gap-0.5 p-0.5 bg-[#07090e] border border-white/8 rounded-md shrink-0"
+              >
+                <button
+                  type="button"
+                  data-testid="era-prenatal"
+                  onClick={() => handleSelectEra('prenatal')}
+                  aria-pressed={timelineEra === 'prenatal'}
+                  className={`px-2 py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                    timelineEra === 'prenatal'
+                      ? 'bg-sky-500/20 text-sky-200 border border-sky-400/40'
+                      : 'text-[#8b95a7] hover:text-white border border-transparent'
+                  }`}
+                >
+                  Prenatal
+                </button>
+                <button
+                  type="button"
+                  data-testid="era-lifespan"
+                  onClick={() => handleSelectEra('lifespan')}
+                  aria-pressed={timelineEra === 'lifespan'}
+                  className={`px-2 py-1 text-[11px] font-medium rounded transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                    timelineEra === 'lifespan'
+                      ? 'bg-[#1e293b] text-white border border-white/14'
+                      : 'text-[#8b95a7] hover:text-white border border-transparent'
+                  }`}
+                >
+                  0–122 yr
+                </button>
+              </div>
+
               <button
                 type="button"
                 onClick={onTogglePlay}
@@ -179,57 +251,101 @@ export function ControlDock({
                 })}
               </div>
 
-              <div className="flex items-center gap-2 flex-1 min-w-[160px]">
+              <div className="flex items-center gap-2 flex-1 min-w-[150px]">
                 <label
                   htmlFor="lifespan-age-slider"
                   className="text-[11px] font-medium text-[#8b95a7] whitespace-nowrap shrink-0"
                 >
-                  Age
+                  {timelineEra === 'prenatal' ? 'Gestation' : 'Age'}
                 </label>
-                <input
-                  id="lifespan-age-slider"
-                  type="range"
-                  min={0}
-                  max={122}
-                  step={0.25}
-                  value={ageYears}
-                  onChange={(e) => onChangeAge(Number(e.target.value))}
-                  aria-label="Brain age in years"
-                  className="w-full h-1.5 accent-sky-400 cursor-pointer"
-                />
-                <span className="text-xs font-medium text-[#eef1f6] font-mono-tabular whitespace-nowrap shrink-0 min-w-[92px] text-right">
+                {timelineEra === 'prenatal' ? (
+                  <input
+                    id="lifespan-age-slider"
+                    type="range"
+                    min={4}
+                    max={40}
+                    step={0.5}
+                    value={currentGw}
+                    onChange={(e) => onChangeAge(gestationalWeekToAgeYears(Number(e.target.value)))}
+                    aria-label="Gestational week from GW4 to GW40"
+                    className="w-full h-1.5 accent-sky-400 cursor-pointer"
+                  />
+                ) : (
+                  <input
+                    id="lifespan-age-slider"
+                    type="range"
+                    min={0}
+                    max={122}
+                    step={0.25}
+                    value={Math.max(0, ageYears)}
+                    onChange={(e) => onChangeAge(Number(e.target.value))}
+                    aria-label="Brain age in years"
+                    className="w-full h-1.5 accent-sky-400 cursor-pointer"
+                  />
+                )}
+                <span className="text-xs font-medium text-[#eef1f6] font-mono-tabular whitespace-nowrap shrink-0 min-w-[104px] text-right">
                   {formatAgeLabel(ageYears)}
                 </span>
               </div>
             </div>
 
-            <div
-              role="group"
-              aria-label="Quick-jump lifespan ages"
-              className="flex items-center gap-1 flex-wrap"
-            >
-              <span className="text-[11px] font-medium text-[#8b95a7] mr-0.5 whitespace-nowrap">
-                Years
-              </span>
-              {QUICK_JUMP_AGES.map((q) => {
-                const active = Math.abs(ageYears - q) < 0.13;
-                return (
-                  <button
-                    key={q}
-                    type="button"
-                    onClick={() => onChangeAge(q)}
-                    aria-pressed={active}
-                    className={`px-2 py-1 text-[11px] font-medium font-mono-tabular rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
-                      active
-                        ? 'bg-[#1b2434] text-white border-sky-400/50'
-                        : 'bg-transparent text-[#9aa4b4] hover:text-white border-white/8 hover:border-white/20'
-                    }`}
-                  >
-                    {formatQuickAgeLabel(q)}
-                  </button>
-                );
-              })}
-            </div>
+            {timelineEra === 'prenatal' ? (
+              <div
+                role="group"
+                aria-label="Quick-jump prenatal gestational weeks"
+                className="flex items-center gap-1 flex-wrap"
+              >
+                <span className="text-[11px] font-medium text-[#8b95a7] mr-0.5 whitespace-nowrap">
+                  Weeks
+                </span>
+                {PRENATAL_QUICK_JUMP_WEEKS.map((gw) => {
+                  const active = Math.abs(currentGw - gw) < 0.3;
+                  return (
+                    <button
+                      key={gw}
+                      type="button"
+                      onClick={() => onChangeAge(gestationalWeekToAgeYears(gw))}
+                      aria-pressed={active}
+                      className={`px-2 py-1 text-[11px] font-medium font-mono-tabular rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                        active
+                          ? 'bg-[#1b2434] text-sky-200 border-sky-400/50'
+                          : 'bg-transparent text-[#9aa4b4] hover:text-white border-white/8 hover:border-white/20'
+                      }`}
+                    >
+                      GW{gw}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div
+                role="group"
+                aria-label="Quick-jump lifespan ages"
+                className="flex items-center gap-1 flex-wrap"
+              >
+                <span className="text-[11px] font-medium text-[#8b95a7] mr-0.5 whitespace-nowrap">
+                  Years
+                </span>
+                {QUICK_JUMP_AGES.map((q) => {
+                  const active = !isPrenatalAge(ageYears) && Math.abs(ageYears - q) < 0.13;
+                  return (
+                    <button
+                      key={q}
+                      type="button"
+                      onClick={() => onChangeAge(q)}
+                      aria-pressed={active}
+                      className={`px-2 py-1 text-[11px] font-medium font-mono-tabular rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                        active
+                          ? 'bg-[#1b2434] text-white border-sky-400/50'
+                          : 'bg-transparent text-[#9aa4b4] hover:text-white border-white/8 hover:border-white/20'
+                      }`}
+                    >
+                      {formatQuickAgeLabel(q)}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="h-px bg-white/8" />
@@ -313,7 +429,7 @@ export function ControlDock({
                     type="button"
                     onClick={() => onSelectCameraPreset(preset.id)}
                     aria-pressed={active}
-                    className={`px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                    className={`px-2 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
                       active
                         ? 'bg-[#1b2434] text-white border-sky-400/50'
                         : 'bg-transparent text-[#9aa4b4] hover:text-white border-white/8 hover:border-white/20'
@@ -325,12 +441,12 @@ export function ControlDock({
               })}
             </div>
 
-            <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="flex items-center gap-1 flex-wrap">
               <button
                 type="button"
                 onClick={onToggleVessels}
                 aria-pressed={showVessels}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
                   showVessels
                     ? 'bg-[#2a171b] text-rose-200 border-rose-400/40'
                     : 'bg-transparent text-[#9aa4b4] hover:text-white border-white/8'
@@ -342,9 +458,38 @@ export function ControlDock({
 
               <button
                 type="button"
+                onClick={onToggleNerves}
+                aria-pressed={showNerves}
+                className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                  showNerves
+                    ? 'bg-[#241f14] text-amber-200 border-amber-400/40'
+                    : 'bg-transparent text-[#9aa4b4] hover:text-white border-white/8'
+                }`}
+              >
+                <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Nerves</span>
+              </button>
+
+              <button
+                type="button"
+                data-testid="toggle-whole-body"
+                onClick={onToggleWholeBody}
+                aria-pressed={showWholeBody}
+                className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                  showWholeBody
+                    ? 'bg-[#2b2314] text-amber-100 border-amber-300/60'
+                    : 'bg-transparent text-[#9aa4b4] hover:text-white border-white/8'
+                }`}
+              >
+                <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Whole Body</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={onToggleVentricles}
                 aria-pressed={showVentricles}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
                   showVentricles
                     ? 'bg-[#132635] text-sky-200 border-sky-400/40'
                     : 'bg-transparent text-[#9aa4b4] hover:text-white border-white/8'
@@ -358,7 +503,7 @@ export function ControlDock({
                 type="button"
                 onClick={onToggleAutoRotate}
                 aria-pressed={autoRotate}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
                   autoRotate
                     ? 'bg-[#1b2434] text-white border-sky-400/50'
                     : 'bg-transparent text-[#9aa4b4] hover:text-white border-white/8'
@@ -372,7 +517,7 @@ export function ControlDock({
                 type="button"
                 onClick={onToggleStructures}
                 aria-pressed={structuresOpen}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
                   structuresOpen
                     ? 'bg-[#1b2434] text-white border-sky-400/50'
                     : 'bg-transparent text-[#cbd5e1] hover:text-white border-white/12'
@@ -385,7 +530,7 @@ export function ControlDock({
               <button
                 type="button"
                 onClick={onOpenReferences}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-[#eef1f6] text-[#07090e] hover:bg-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-[#eef1f6] text-[#07090e] hover:bg-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
               >
                 <ImageIcon className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Reference Plates</span>

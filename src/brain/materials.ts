@@ -7,6 +7,10 @@ export interface CortexUniforms {
   uHoverLobe: { value: number }; // -1: none, 0..3: lobe
   uLobeKnowledge: { value: THREE.Vector4 }; // 0..1 empirical coverage per lobe (F, P, T, O)
   uLobeTemp: { value: THREE.Vector4 }; // 0..1 normalized temp or -1 if unmeasured (F, P, T, O)
+  uPrimaryFold: { value: number }; // 0..1 primary sulcal cleft indentation
+  uSecondaryFold: { value: number }; // 0..1 secondary serpentine gyral folding
+  uTertiaryFold: { value: number }; // 0..1 tertiary sulcal branching
+  uSulcalWidening: { value: number }; // 0..1 senescence sulcal widening & crown thinning
   uTime: { value: number };
 }
 
@@ -78,6 +82,10 @@ export function createCortexMaterial(sharedUniforms: CortexUniforms): THREE.Mesh
     shader.uniforms.uHoverLobe = sharedUniforms.uHoverLobe;
     shader.uniforms.uLobeKnowledge = sharedUniforms.uLobeKnowledge;
     shader.uniforms.uLobeTemp = sharedUniforms.uLobeTemp;
+    shader.uniforms.uPrimaryFold = sharedUniforms.uPrimaryFold;
+    shader.uniforms.uSecondaryFold = sharedUniforms.uSecondaryFold;
+    shader.uniforms.uTertiaryFold = sharedUniforms.uTertiaryFold;
+    shader.uniforms.uSulcalWidening = sharedUniforms.uSulcalWidening;
     shader.uniforms.uTime = sharedUniforms.uTime;
 
     shader.vertexShader = shader.vertexShader
@@ -85,9 +93,18 @@ export function createCortexMaterial(sharedUniforms: CortexUniforms): THREE.Mesh
         '#include <common>',
         /* glsl */ `
         #include <common>
+        uniform float uPrimaryFold;
+        uniform float uSecondaryFold;
+        uniform float uTertiaryFold;
+        uniform float uSulcalWidening;
         attribute float aGyrus;
         attribute float aLobe;
         attribute float aPrimarySulcus;
+        attribute float aSecondaryWeight;
+        attribute vec3 aBasePos;
+        attribute vec3 aBaseNormal;
+        attribute vec3 aPrimaryDelta;
+        attribute vec3 aFoldDelta;
         varying float vGyrus;
         varying float vLobe;
         varying float vPrimarySulcus;
@@ -98,13 +115,34 @@ export function createCortexMaterial(sharedUniforms: CortexUniforms): THREE.Mesh
       `,
       )
       .replace(
+        '#include <beginnormal_vertex>',
+        /* glsl */ `
+        #include <beginnormal_vertex>
+        float normFoldMix = clamp(uPrimaryFold * 0.25 + uSecondaryFold * mix(0.62, 1.0, uTertiaryFold) * 0.75, 0.0, 1.0);
+        objectNormal = normalize(mix(aBaseNormal, objectNormal, normFoldMix));
+      `,
+      )
+      .replace(
         '#include <begin_vertex>',
         /* glsl */ `
         #include <begin_vertex>
-        vGyrus = aGyrus;
+        float tertiaryWeightMix = mix(1.0, mix(0.55, 1.0, uTertiaryFold), aSecondaryWeight);
+        float foldBlend = uSecondaryFold * tertiaryWeightMix;
+        vec3 devPos = aBasePos + aPrimaryDelta * uPrimaryFold + aFoldDelta * foldBlend;
+        // Senescent gyral thinning & sulcal widening (>42 yr)
+        float atrophyInset = uSulcalWidening * (1.0 - 0.35 * aGyrus) * 0.022;
+        devPos -= normalize(aBasePos + vec3(0.0001)) * atrophyInset;
+        transformed = devPos;
+
+        float foldPresence = clamp(uPrimaryFold * 0.25 + foldBlend * 0.75, 0.0, 1.0);
+        float stageGyrus = mix(1.0, aGyrus, foldPresence);
+        // Widen sulcal crevices slightly during late senescence
+        stageGyrus = clamp(pow(max(stageGyrus, 0.0001), 1.0 + uSulcalWidening * 0.55), 0.0, 1.0);
+
+        vGyrus = stageGyrus;
         vLobe = aLobe;
-        vPrimarySulcus = aPrimarySulcus;
-        vObjPos = position;
+        vPrimarySulcus = aPrimarySulcus * uPrimaryFold;
+        vObjPos = devPos;
         vNMat0 = normalMatrix[0];
         vNMat1 = normalMatrix[1];
         vNMat2 = normalMatrix[2];
@@ -616,3 +654,200 @@ export function createSubcorticalMaterial(
 
   return material;
 }
+
+export function createVesselMaterial(
+  baseHex: string,
+  kind: 'artery' | 'vein' | 'sinus',
+  subUniforms: SubcorticalUniforms,
+): THREE.MeshPhysicalMaterial {
+  const isSinus = kind === 'sinus';
+  const isArtery = kind === 'artery';
+
+  const material = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color(baseHex),
+    roughness: isSinus ? 0.46 : isArtery ? 0.24 : 0.30,
+    metalness: 0.0,
+    clearcoat: isSinus ? 0.48 : isArtery ? 0.88 : 0.78,
+    clearcoatRoughness: isSinus ? 0.28 : isArtery ? 0.12 : 0.16,
+    sheen: isSinus ? 0.30 : 0.22,
+    sheenColor: new THREE.Color(isArtery ? '#f5b8b8' : isSinus ? '#c2bce0' : '#b7a8e8'),
+    envMapIntensity: isSinus ? 0.85 : 1.1,
+  });
+
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uHighlighted = subUniforms.uHighlighted;
+    shader.uniforms.uHovered = subUniforms.uHovered;
+    shader.uniforms.uEpistemicTint = subUniforms.uEpistemicTint;
+    shader.uniforms.uEpistemicBlend = subUniforms.uEpistemicBlend;
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        /* glsl */ `
+        #include <common>
+        varying vec3 vObjPos;
+        varying vec3 vNMat0;
+        varying vec3 vNMat1;
+        varying vec3 vNMat2;
+      `,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        /* glsl */ `
+        #include <begin_vertex>
+        vObjPos = position;
+        vNMat0 = normalMatrix[0];
+        vNMat1 = normalMatrix[1];
+        vNMat2 = normalMatrix[2];
+      `,
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        /* glsl */ `
+        #include <common>
+        uniform float uHighlighted;
+        uniform float uHovered;
+        uniform vec3 uEpistemicTint;
+        uniform float uEpistemicBlend;
+        varying vec3 vObjPos;
+        varying vec3 vNMat0;
+        varying vec3 vNMat1;
+        varying vec3 vNMat2;
+        ${GLSL_NOISE_CHUNK}
+      `,
+      )
+      .replace(
+        '#include <color_fragment>',
+        /* glsl */ `
+        #include <color_fragment>
+        float m1 = vnoise3(vObjPos * 22.0);
+        float band = 0.94 + 0.06 * sin((vObjPos.x + vObjPos.y + vObjPos.z) * 44.0 + m1 * 2.0);
+        diffuseColor.rgb = mix(diffuseColor.rgb, uEpistemicTint, uEpistemicBlend) * band * (0.93 + 0.07 * m1);
+        if (uHighlighted > 0.5) {
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.86, 0.72), 0.32);
+        } else if (uHovered > 0.5) {
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.94, 1.0), 0.24);
+        }
+      `,
+      )
+      .replace(
+        '#include <normal_fragment_maps>',
+        /* glsl */ `
+        #include <normal_fragment_maps>
+        vec3 objBump = vnoise3Grad(vObjPos * 30.0) * 0.025;
+        vec3 viewBump = normalize(vNMat0 * objBump.x + vNMat1 * objBump.y + vNMat2 * objBump.z);
+        normal = normalize(normal - (viewBump - normal * dot(normal, viewBump)) * 0.14);
+      `,
+      )
+      .replace(
+        '#include <emissivemap_fragment>',
+        /* glsl */ `
+        #include <emissivemap_fragment>
+        vec3 viewDirFrag = normalize(vViewPosition);
+        float fresnel = pow(1.0 - clamp(dot(normal, viewDirFrag), 0.0, 1.0), 2.3);
+        totalEmissiveRadiance += vec3(0.38, 0.62, 0.95) * fresnel * (0.78 * uHighlighted + 0.48 * uHovered);
+        totalEmissiveRadiance += diffuseColor.rgb * (0.28 * uHighlighted + 0.16 * uHovered);
+      `,
+      );
+  };
+
+  return material;
+}
+
+export function createNerveMaterial(
+  baseHex: string,
+  subUniforms: SubcorticalUniforms,
+): THREE.MeshPhysicalMaterial {
+  const material = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color(baseHex),
+    roughness: 0.34,
+    metalness: 0.0,
+    clearcoat: 0.60,
+    clearcoatRoughness: 0.22,
+    sheen: 0.48,
+    sheenRoughness: 0.42,
+    sheenColor: new THREE.Color('#fff4da'),
+    envMapIntensity: 0.95,
+  });
+
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uHighlighted = subUniforms.uHighlighted;
+    shader.uniforms.uHovered = subUniforms.uHovered;
+    shader.uniforms.uEpistemicTint = subUniforms.uEpistemicTint;
+    shader.uniforms.uEpistemicBlend = subUniforms.uEpistemicBlend;
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        /* glsl */ `
+        #include <common>
+        varying vec3 vObjPos;
+        varying vec3 vNMat0;
+        varying vec3 vNMat1;
+        varying vec3 vNMat2;
+      `,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        /* glsl */ `
+        #include <begin_vertex>
+        vObjPos = position;
+        vNMat0 = normalMatrix[0];
+        vNMat1 = normalMatrix[1];
+        vNMat2 = normalMatrix[2];
+      `,
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        /* glsl */ `
+        #include <common>
+        uniform float uHighlighted;
+        uniform float uHovered;
+        uniform vec3 uEpistemicTint;
+        uniform float uEpistemicBlend;
+        varying vec3 vObjPos;
+        varying vec3 vNMat0;
+        varying vec3 vNMat1;
+        varying vec3 vNMat2;
+        ${GLSL_NOISE_CHUNK}
+      `,
+      )
+      .replace(
+        '#include <color_fragment>',
+        /* glsl */ `
+        #include <color_fragment>
+        float m1 = vnoise3(vObjPos * 24.0);
+        float fascicle = 0.91 + 0.09 * sin(vObjPos.z * 78.0 + vObjPos.x * 54.0 + m1 * 2.2);
+        diffuseColor.rgb = mix(diffuseColor.rgb, uEpistemicTint, uEpistemicBlend) * fascicle * (0.94 + 0.06 * m1);
+        if (uHighlighted > 0.5) {
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.95, 0.78), 0.34);
+        } else if (uHovered > 0.5) {
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.84, 0.93, 1.0), 0.25);
+        }
+      `,
+      )
+      .replace(
+        '#include <normal_fragment_maps>',
+        /* glsl */ `
+        #include <normal_fragment_maps>
+        vec3 fiberWave = vec3(cos(vObjPos.x * 68.0) * 0.06, cos(vObjPos.y * 68.0) * 0.04, cos(vObjPos.z * 78.0) * 0.05);
+        vec3 objBump = vnoise3Grad(vObjPos * 28.0) * 0.025 + fiberWave;
+        vec3 viewBump = normalize(vNMat0 * objBump.x + vNMat1 * objBump.y + vNMat2 * objBump.z);
+        normal = normalize(normal - (viewBump - normal * dot(normal, viewBump)) * 0.18);
+      `,
+      )
+      .replace(
+        '#include <emissivemap_fragment>',
+        /* glsl */ `
+        #include <emissivemap_fragment>
+        vec3 viewDirFrag = normalize(vViewPosition);
+        float fresnel = pow(1.0 - clamp(dot(normal, viewDirFrag), 0.0, 1.0), 2.2);
+        totalEmissiveRadiance += vec3(0.42, 0.68, 0.98) * fresnel * (0.78 * uHighlighted + 0.48 * uHovered);
+        totalEmissiveRadiance += diffuseColor.rgb * (0.30 * uHighlighted + 0.18 * uHovered);
+      `,
+      );
+  };
+
+  return material;
+}
+

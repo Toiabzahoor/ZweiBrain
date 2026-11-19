@@ -6,7 +6,8 @@ import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLigh
 import { buildBrainAssembly, type BrainAssembly } from '../brain/anatomyBuilder';
 import { classifyCorticalLobe } from '../brain/math3d';
 import {
-  computeBrainLinearScale,
+  computeCorticalDevelopment,
+  computeViewportSpecimenScale,
   getKnowledgeColorRGB,
   getNormalizedTempForShader,
   getRegionEpistemicState,
@@ -14,6 +15,9 @@ import {
 import {
   BRAIN_REGIONS,
   CAMERA_PRESETS,
+  isBodyNerveRegion,
+  isNerveRegion,
+  isVesselRegion,
   type CameraPresetId,
   type RegionId,
   type TissueFinish,
@@ -29,6 +33,8 @@ export interface BrainViewportProps {
   cameraPreset: CameraPresetId | null;
   cameraRequestNonce: number;
   showVessels: boolean;
+  showNerves: boolean;
+  showWholeBody: boolean;
   showVentricles: boolean;
   autoRotate: boolean;
   onSelectRegion: (regionId: RegionId | null) => void;
@@ -117,7 +123,7 @@ export function BrainViewport(props: BrainViewportProps) {
       return aspect < 0.95 ? Math.min(60, 36 / Math.max(0.56, aspect)) : 36;
     };
 
-    const camera = new THREE.PerspectiveCamera(computeResponsiveFov(width, height), width / height, 0.1, 45);
+    const camera = new THREE.PerspectiveCamera(computeResponsiveFov(width, height), width / height, 0.1, 100);
     const defaultPreset = CAMERA_PRESETS[0];
     camera.position.set(...defaultPreset.position);
 
@@ -227,14 +233,27 @@ export function BrainViewport(props: BrainViewportProps) {
     const desiredTarget = new THREE.Vector3(...defaultPreset.target);
     let cameraFlightActive = false;
 
+    const initialDev = computeCorticalDevelopment(propsRef.current.ageYears);
     let currentGlass = 0;
     let targetGlass = 0;
     let currentSplit = 0;
     let targetSplit = 0;
     let currentExplode = 0;
     let targetExplode = 0;
-    let currentScale = computeBrainLinearScale(propsRef.current.ageYears);
+    let currentScale = computeViewportSpecimenScale(propsRef.current.ageYears);
     let targetScale = currentScale;
+    let currentPrimaryFold = initialDev.primaryFold;
+    let targetPrimaryFold = currentPrimaryFold;
+    let currentSecondaryFold = initialDev.secondaryFold;
+    let targetSecondaryFold = currentSecondaryFold;
+    let currentTertiaryFold = initialDev.tertiaryFold;
+    let targetTertiaryFold = currentTertiaryFold;
+    let currentSulcalWidening = initialDev.sulcalWidening;
+    let targetSulcalWidening = currentSulcalWidening;
+    let currentCerebellumRel = initialDev.cerebellumRelScale;
+    let targetCerebellumRel = currentCerebellumRel;
+    let currentVentricleRel = initialDev.ventricleRelScale;
+    let targetVentricleRel = currentVentricleRel;
 
     let frameId = 0;
     let renderBusy = false;
@@ -290,17 +309,28 @@ export function BrainViewport(props: BrainViewportProps) {
         }
       }
 
-      // Glass cortex / Split / Exploded / Lifespan Scale transitions
+      // Glass cortex / Split / Exploded / Lifespan Scale & Morphogenesis transitions
+      const morphLambda = isSoftwareGl ? 28 : 11.0;
       currentGlass = THREE.MathUtils.damp(currentGlass, targetGlass, lambda, dt);
       currentSplit = THREE.MathUtils.damp(currentSplit, targetSplit, lambda, dt);
       currentExplode = THREE.MathUtils.damp(currentExplode, targetExplode, lambda, dt);
-      currentScale = THREE.MathUtils.damp(currentScale, targetScale, isSoftwareGl ? 28 : 11.0, dt);
+      currentScale = THREE.MathUtils.damp(currentScale, targetScale, morphLambda, dt);
+      currentPrimaryFold = THREE.MathUtils.damp(currentPrimaryFold, targetPrimaryFold, morphLambda, dt);
+      currentSecondaryFold = THREE.MathUtils.damp(currentSecondaryFold, targetSecondaryFold, morphLambda, dt);
+      currentTertiaryFold = THREE.MathUtils.damp(currentTertiaryFold, targetTertiaryFold, morphLambda, dt);
+      currentSulcalWidening = THREE.MathUtils.damp(currentSulcalWidening, targetSulcalWidening, morphLambda, dt);
+      currentCerebellumRel = THREE.MathUtils.damp(currentCerebellumRel, targetCerebellumRel, morphLambda, dt);
+      currentVentricleRel = THREE.MathUtils.damp(currentVentricleRel, targetVentricleRel, morphLambda, dt);
 
       if (
         Math.abs(currentGlass - targetGlass) > 0.004 ||
         Math.abs(currentSplit - targetSplit) > 0.004 ||
         Math.abs(currentExplode - targetExplode) > 0.004 ||
-        Math.abs(currentScale - targetScale) > 0.002
+        Math.abs(currentScale - targetScale) > 0.002 ||
+        Math.abs(currentPrimaryFold - targetPrimaryFold) > 0.003 ||
+        Math.abs(currentSecondaryFold - targetSecondaryFold) > 0.003 ||
+        Math.abs(currentTertiaryFold - targetTertiaryFold) > 0.003 ||
+        Math.abs(currentSulcalWidening - targetSulcalWidening) > 0.003
       ) {
         needsAnotherFrame = true;
       } else {
@@ -308,11 +338,23 @@ export function BrainViewport(props: BrainViewportProps) {
         currentSplit = targetSplit;
         currentExplode = targetExplode;
         currentScale = targetScale;
+        currentPrimaryFold = targetPrimaryFold;
+        currentSecondaryFold = targetSecondaryFold;
+        currentTertiaryFold = targetTertiaryFold;
+        currentSulcalWidening = targetSulcalWidening;
+        currentCerebellumRel = targetCerebellumRel;
+        currentVentricleRel = targetVentricleRel;
       }
 
       assembly.root.scale.setScalar(currentScale);
       shadowPlane.scale.setScalar(currentScale);
       shadowPlane.position.y = 0.24 - 1.40 * currentScale;
+
+      // Apply GPU cortical folding & aging sulcal widening uniforms
+      assembly.cortexUniforms.uPrimaryFold.value = currentPrimaryFold;
+      assembly.cortexUniforms.uSecondaryFold.value = currentSecondaryFold;
+      assembly.cortexUniforms.uTertiaryFold.value = currentTertiaryFold;
+      assembly.cortexUniforms.uSulcalWidening.value = currentSulcalWidening;
 
       // Apply cortical glass material state
       assembly.cortexUniforms.uGlassMode.value = currentGlass;
@@ -326,8 +368,10 @@ export function BrainViewport(props: BrainViewportProps) {
       }
       cortexMat.opacity = targetOpacity;
 
-      // Apply split + exploded offsets cleanly from base positions
+      // Apply split + exploded offsets & relative cerebellar/ventricular scaling
       const { parts, partBasePositions } = assembly;
+      parts.cerebellum.scale.setScalar(currentCerebellumRel);
+      parts.ventricles.scale.setScalar(currentVentricleRel);
       const hemiLateral = currentSplit * 0.56 + currentExplode * 0.62;
 
       const baseLeft = partBasePositions.get(parts.leftHemisphere)!;
@@ -374,6 +418,39 @@ export function BrainViewport(props: BrainViewportProps) {
         baseRightVessels.y + currentExplode * 0.14,
         baseRightVessels.z,
       );
+
+      const baseStemVessels = partBasePositions.get(parts.brainstemVessels)!;
+      parts.brainstemVessels.position.set(
+        baseStemVessels.x,
+        baseStemVessels.y - currentExplode * 0.40,
+        baseStemVessels.z,
+      );
+
+      const baseSinusVessels = partBasePositions.get(parts.sinusVessels)!;
+      parts.sinusVessels.position.set(
+        baseSinusVessels.x,
+        baseSinusVessels.y + currentExplode * 0.16,
+        baseSinusVessels.z,
+      );
+
+      const baseForeNerves = partBasePositions.get(parts.forebrainNerves)!;
+      parts.forebrainNerves.position.set(baseForeNerves.x, baseForeNerves.y, baseForeNerves.z);
+
+      const baseStemNerves = partBasePositions.get(parts.brainstemNerves)!;
+      parts.brainstemNerves.position.set(
+        baseStemNerves.x,
+        baseStemNerves.y - currentExplode * 0.40,
+        baseStemNerves.z,
+      );
+
+      const baseBodyNerves = partBasePositions.get(parts.wholeBodyNerves);
+      if (baseBodyNerves) {
+        parts.wholeBodyNerves.position.set(
+          baseBodyNerves.x,
+          baseBodyNerves.y - currentExplode * 0.40,
+          baseBodyNerves.z,
+        );
+      }
 
       return needsAnotherFrame;
     }
@@ -422,7 +499,15 @@ export function BrainViewport(props: BrainViewportProps) {
       targetGlass = p.viewMode === 'glass' ? 1 : 0;
       targetSplit = p.viewMode === 'split' && p.cameraPreset !== 'midsagittal' ? 1 : 0;
       targetExplode = p.viewMode === 'exploded' ? 1 : 0;
-      targetScale = computeBrainLinearScale(p.ageYears);
+      targetScale = computeViewportSpecimenScale(p.ageYears);
+
+      const dev = computeCorticalDevelopment(p.ageYears);
+      targetPrimaryFold = dev.primaryFold;
+      targetSecondaryFold = dev.secondaryFold;
+      targetTertiaryFold = dev.tertiaryFold;
+      targetSulcalWidening = dev.sulcalWidening;
+      targetCerebellumRel = dev.cerebellumRelScale;
+      targetVentricleRel = dev.ventricleRelScale;
 
       const finishCode =
         p.tissueFinish === 'fresh'
@@ -459,8 +544,12 @@ export function BrainViewport(props: BrainViewportProps) {
       const isEpistemicMode = p.tissueFinish === 'knowledge' || p.tissueFinish === 'temperature';
       for (const [key, uni] of Object.entries(assembly.subcorticalUniforms)) {
         const regId = key as RegionId;
-        uni.uHighlighted.value = p.selectedRegion === key ? 1 : 0;
-        uni.uHovered.value = p.hoveredRegion === key ? 1 : 0;
+        const selectedMatches =
+          p.selectedRegion === key || (p.selectedRegion === 'vasculature' && isVesselRegion(regId));
+        const hoveredMatches =
+          p.hoveredRegion === key || (p.hoveredRegion === 'vasculature' && isVesselRegion(regId));
+        uni.uHighlighted.value = selectedMatches ? 1 : 0;
+        uni.uHovered.value = hoveredMatches ? 1 : 0;
         uni.uEpistemicBlend.value = isEpistemicMode ? 1 : 0;
 
         if (p.tissueFinish === 'knowledge') {
@@ -488,10 +577,47 @@ export function BrainViewport(props: BrainViewportProps) {
         }
       }
 
-      assembly.parts.vasculature.visible = p.showVessels;
+      // Chronological embryonic nerve emergence & outgrowth (GW4 -> GW9+)
+      for (const [nerveId, grp] of assembly.nerveRegionGroups.entries()) {
+        if (dev.isPrenatal) {
+          const emerge = (grp.userData.emergenceGw as number) ?? 5.0;
+          const mature = (grp.userData.matureGw as number) ?? 8.5;
+          const rawT = THREE.MathUtils.clamp(
+            (dev.gestationalWeek - (emerge - 0.35)) / Math.max(0.5, mature - (emerge - 0.35)),
+            0,
+            1,
+          );
+          const t = rawT * rawT * (3 - 2 * rawT);
+          grp.visible = t > 0.02 || p.selectedRegion === nerveId;
+          if (grp.visible) {
+            const s =
+              nerveId === 'nerve-cervical-spinal'
+                ? THREE.MathUtils.lerp(0.55, 1.0, t)
+                : THREE.MathUtils.lerp(0.16, 1.0, t);
+            grp.scale.setScalar(s);
+          }
+        } else {
+          grp.visible = true;
+          grp.scale.setScalar(1.0);
+        }
+      }
+
+      const bodyVisible =
+        p.showWholeBody || Boolean(p.selectedRegion && isBodyNerveRegion(p.selectedRegion));
+      assembly.parts.vasculature.visible =
+        p.showVessels || Boolean(p.selectedRegion && isVesselRegion(p.selectedRegion));
+      assembly.parts.cranialNerves.visible =
+        p.showNerves || bodyVisible || Boolean(p.selectedRegion && isNerveRegion(p.selectedRegion));
+      assembly.parts.wholeBodyNerves.visible = bodyVisible;
       assembly.parts.ventricles.visible = p.showVentricles || p.selectedRegion === 'ventricles';
       assembly.parts.leftHemisphere.visible = p.cameraPreset !== 'midsagittal';
       assembly.parts.leftCorticalVessels.visible = p.cameraPreset !== 'midsagittal';
+
+      controls.maxDistance = bodyVisible ? 50 : 7.5;
+      if (scene.fog instanceof THREE.FogExp2) {
+        scene.fog.density = bodyVisible ? 0.005 : 0.055;
+      }
+      shadowPlane.visible = !bodyVisible;
 
       controls.autoRotate = !isSoftwareGl && p.autoRotate;
       requestRender();
@@ -669,6 +795,8 @@ export function BrainViewport(props: BrainViewportProps) {
     props.hoveredRegion,
     props.cameraPreset,
     props.showVessels,
+    props.showNerves,
+    props.showWholeBody,
     props.showVentricles,
     props.autoRotate,
   ]);

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   classifyCorticalLobe,
   evaluateCorticalVertex,
+  evaluateCorticalVertexLayers,
   fbm3D,
   gradientNoise3D,
 } from './math3d';
@@ -37,6 +38,12 @@ test('sculpted cerebrum matches adult MNI152 anatomical proportions (1 unit = 70
       const z = Math.sin(theta) * r;
 
       const v = evaluateCorticalVertex(x, y, z, side);
+      const layered = evaluateCorticalVertexLayers(x, y, z, side);
+      assert.ok(Math.abs(v.x - (layered.baseX + layered.primaryDx + layered.foldDx)) < 1e-10);
+      assert.ok(Math.abs(v.y - (layered.baseY + layered.primaryDy + layered.foldDy)) < 1e-10);
+      assert.ok(Math.abs(v.z - (layered.baseZ + layered.primaryDz + layered.foldDz)) < 1e-10);
+      assert.ok(layered.secondaryBranchWeight >= 0 && layered.secondaryBranchWeight <= 1);
+
       if (v.x < minX) minX = v.x;
       if (v.x > maxX) maxX = v.x;
       if (v.y < minY) minY = v.y;
